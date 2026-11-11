@@ -137,13 +137,14 @@ public sealed class StorageScannerTests : IDisposable
     }
 
     [Fact]
-    public async Task ReportOnly_WinTempReported()
+    public async Task AdminWinTemp_FoundAsAdminDeletable()
     {
         var wt = Path.Combine(_dirs.WinDir, "Temp");
         MakeFile(Path.Combine(wt, "z.tmp"), 700);
         var r = await Scanner().ScanAsync(null, CancellationToken.None);
         var item = Assert.Single(r.Items, i => i.Path == wt);
-        Assert.True(item.Rule.ReportOnly);
+        Assert.False(item.Rule.ReportOnly);
+        Assert.True(item.Rule.NeedsAdmin);
         Assert.Equal(700, item.Bytes);
     }
 

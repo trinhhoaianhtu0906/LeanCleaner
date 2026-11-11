@@ -90,11 +90,12 @@ public static class JunkRules
         AddDir("D3DSCache", GFixed, L("D3DSCache"), TargetKind.WholeDir, RiskLevel.Low, true);
         AddDir("INetCache", GFixed, L("Microsoft", "Windows", "INetCache"), TargetKind.WholeDir, RiskLevel.Low, true);
 
-        AddDir("Windows\\Temp (chỉ báo cáo)", GFixed, Path.Combine(d.WinDir, "Temp"), TargetKind.ReportOnlySize, RiskLevel.None, false, true);
-        AddDir("Windows Update Download (chỉ báo cáo)", GFixed, Path.Combine(d.WinDir, "SoftwareDistribution", "Download"),
-               TargetKind.ReportOnlySize, RiskLevel.None, false, true);
-        AddDir("LiveKernelReports (chỉ báo cáo)", GFixed, Path.Combine(d.WinDir, "LiveKernelReports"),
-               TargetKind.ReportOnlySize, RiskLevel.None, false, true);
+        foreach (var op in AdminTargets.DeleteOps)
+        {
+            var root = AdminTargets.RootOf(op, d);
+            if (Directory.Exists(root))
+                list.Add(new RuleTarget(AdminTargets.RuleFor(op, d), root, TargetKind.WholeDir));
+        }
 
         AddDir("File lớn ít dùng", GLarge, d.UserProfile, TargetKind.LargeFiles, RiskLevel.Medium, false);
         AddDir("Bộ cài cũ (Downloads)", GInst, Path.Combine(d.UserProfile, "Downloads"), TargetKind.TopLevelChildren,
@@ -105,34 +106,9 @@ public static class JunkRules
         AddDir("Cache NuGet", GDev, L("NuGet", "v3-cache"), TargetKind.WholeDir, RiskLevel.Low, false);
         AddDir("Cache Yarn", GDev, L("Yarn", "Cache"), TargetKind.WholeDir, RiskLevel.Low, false);
 
-        var vhdx = new List<string>();
-        var docker = L("Docker", "wsl");
-        try
-        {
-            if (!ct.IsCancellationRequested && Directory.Exists(docker))
-                foreach (var f in Directory.EnumerateFiles(docker, "*.vhdx", new EnumerationOptions
-                { RecurseSubdirectories = true, IgnoreInaccessible = true, AttributesToSkip = FileAttributes.ReparsePoint }))
-                {
-                    if (ct.IsCancellationRequested) break;
-                    vhdx.Add(f);
-                }
-        }
-        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { /* bỏ qua nguồn lỗi */ }
-        var packages = L("Packages");
-        try
-        {
-            if (!ct.IsCancellationRequested && Directory.Exists(packages))
-                foreach (var pkg in Directory.EnumerateDirectories(packages, "*", SafeOpts))
-                {
-                    if (ct.IsCancellationRequested) break;
-                    var f = Path.Combine(pkg, "LocalState", "ext4.vhdx");
-                    if (File.Exists(f)) vhdx.Add(f);
-                }
-        }
-        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { /* bỏ qua nguồn lỗi */ }
-        foreach (var f in vhdx)
-            list.Add(new RuleTarget(new JunkRule("Đĩa ảo Docker/WSL (chỉ báo cáo): " + Path.GetFileName(Path.GetDirectoryName(f)),
-                GDev, new[] { f }, RiskLevel.None, false, true), f, TargetKind.ReportOnlySize));
+        foreach (var f in AdminTargets.FindVhdx(d, ct))
+            list.Add(new RuleTarget(new JunkRule("Đĩa ảo Docker/WSL: " + Path.GetFileName(Path.GetDirectoryName(f)),
+                GDev, new[] { f }, RiskLevel.None, false, true, Op: AdminOp.CompactVhdx), f, TargetKind.ReportOnlySize));
 
         return list;
     }
