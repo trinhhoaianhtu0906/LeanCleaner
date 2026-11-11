@@ -64,25 +64,37 @@ public sealed class DiskpartCompactor : IVhdxCompactor
         }
     }
 
-    /// <summary>Ghi script vào file mới (giữ khóa ghi tới khi diskpart thoát) rồi chạy diskpart; trả về mã thoát, hoặc null nếu quá thời gian (đã kill).</summary>
+    /// <summary>Ghi script vào file mới rồi đóng, mở lại chỉ-đọc (chặn ghi/xóa) và kiểm tra nội dung trước khi chạy diskpart; trả về mã thoát, hoặc null nếu quá thời gian (đã kill).</summary>
     private int? RunScript(string content, TimeSpan timeout)
     {
         var script = Path.Combine(_workDir, "compact-" + Guid.NewGuid().ToString("N") + ".txt");
-        using var fs = new FileStream(script, FileMode.CreateNew, FileAccess.Write, FileShare.Read);
-        using (var w = new StreamWriter(fs, new System.Text.UTF8Encoding(false), 1024, leaveOpen: true))
+        try
         {
-            w.Write(content);
-            w.Flush();
+            using (var ws = new FileStream(script, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+            using (var w = new StreamWriter(ws, new System.Text.UTF8Encoding(false)))
+            {
+                w.Write(content);
+                w.Flush();
+            }
+            using var rs = new FileStream(script, FileMode.Open, FileAccess.Read, FileShare.Read);
+            using (var r = new StreamReader(rs, new System.Text.UTF8Encoding(false), false, 1024, leaveOpen: true))
+            {
+                if (!string.Equals(r.ReadToEnd(), content, StringComparison.Ordinal))
+                    throw new InvalidOperationException("Script bị thay đổi");
+            }
+            var psi = new ProcessStartInfo(Path.Combine(Environment.SystemDirectory, "diskpart.exe"), $"/s \"{script}\"")
+                { CreateNoWindow = true, UseShellExecute = false };
+            using var p = Process.Start(psi) ?? throw new InvalidOperationException("Không chạy được diskpart");
+            if (!p.WaitForExit((int)timeout.TotalMilliseconds))
+            {
+                try { p.Kill(true); p.WaitForExit(10_000); } catch (Exception) { /* bỏ qua */ }
+                return null;
+            }
+            return p.ExitCode;
         }
-        fs.Flush();
-        var psi = new ProcessStartInfo(Path.Combine(Environment.SystemDirectory, "diskpart.exe"), $"/s \"{script}\"")
-            { CreateNoWindow = true, UseShellExecute = false };
-        using var p = Process.Start(psi) ?? throw new InvalidOperationException("Không chạy được diskpart");
-        if (!p.WaitForExit((int)timeout.TotalMilliseconds))
+        finally
         {
-            try { p.Kill(true); p.WaitForExit(10_000); } catch (Exception) { /* bỏ qua */ }
-            return null;
+            try { File.Delete(script); } catch (Exception) { /* bỏ qua */ }
         }
-        return p.ExitCode;
     }
 }
