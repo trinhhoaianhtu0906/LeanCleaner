@@ -42,6 +42,35 @@ public sealed class DeleterTests : IDisposable
 
     private string LogText() => File.Exists(_logPath) ? File.ReadAllText(_logPath) : "";
 
+    private sealed class FakeGuard : IDeleteGuard
+    {
+        public bool Allow;
+        public List<string> Calls = new();
+        public bool IsDeletable(string path, JunkRule rule, out string reason)
+        { Calls.Add(path); reason = Allow ? "" : "nope"; return Allow; }
+    }
+
+    [Fact]
+    public async Task CustomGuard_DenyBlocksDelete()
+    {
+        var f = MakeFile(Path.Combine(_root, "c.tmp"), 100);
+        var g = new FakeGuard { Allow = false };
+        var r = await new Deleter(g, _log).RecycleAsync(new[] { new ScanItem(Rule(), f, 100, false, false) }, CancellationToken.None);
+        Assert.True(File.Exists(f));
+        Assert.Contains(r.Skipped, s => s.Reason == "nope");
+        Assert.Contains(f, g.Calls);
+    }
+
+    [Fact]
+    public async Task CustomGuard_AllowRecycles()
+    {
+        var f = MakeFile(Path.Combine(_root, "d.tmp"), 100);
+        var g = new FakeGuard { Allow = true };
+        var r = await new Deleter(g, _log).RecycleAsync(new[] { new ScanItem(Rule(), f, 100, false, false) }, CancellationToken.None);
+        Assert.False(File.Exists(f));
+        Assert.Equal(1, r.Succeeded);
+    }
+
     [Fact]
     public async Task File_item_is_recycled()
     {

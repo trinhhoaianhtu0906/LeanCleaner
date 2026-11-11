@@ -136,6 +136,15 @@ public sealed class SafetyGuardTests : IDisposable
     }
 
     [Fact]
+    public void NeedsAdminRule_IsRejected()
+    {
+        var rule = new JunkRule("x", "g", new[] { _root }, RiskLevel.Low, false, false, NeedsAdmin: true);
+        var g = new SafetyGuard(Array.Empty<string>());
+        Assert.False(g.IsDeletable(Path.Combine(_root, "sub", "f.txt"), rule, out var reason));
+        Assert.Equal("Cần quyền admin", reason);
+    }
+
+    [Fact]
     public void ReportOnlyRule_IsDenied()
     {
         Assert.False(Guard().IsDeletable(Path.Combine(_root, "sub", "f.txt"), Rule(reportOnly: true), out var reason));

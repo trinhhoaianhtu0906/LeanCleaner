@@ -17,18 +17,19 @@ public sealed class Deleter
         AttributesToSkip = FileAttributes.ReparsePoint
     };
 
-    private readonly SafetyGuard _guard;
+    private readonly IDeleteGuard _guard;
+    private readonly SafetyGuard _measureGuard;
     private readonly AppLog _log;
     private readonly Func<string, long> _quotaFor;
     private const string TooBig = "Quá lớn để vào Thùng rác — hãy tự xóa nếu cần";
     private const string BinOff = "Thùng rác của ổ này đang tắt";
 
     /// <summary>Tạo Deleter dùng guard và log đã cho.</summary>
-    public Deleter(SafetyGuard guard, AppLog log) : this(guard, log, RecycleQuota) { }
+    public Deleter(IDeleteGuard guard, AppLog log) : this(guard, log, RecycleQuota) { }
 
     /// <summary>Dành cho kiểm thử: quotaFor(driveRoot) trả hạn mức Thùng rác (byte; 0 = tắt).</summary>
-    internal Deleter(SafetyGuard guard, AppLog log, Func<string, long> quotaFor)
-    { _guard = guard; _log = log; _quotaFor = quotaFor; }
+    internal Deleter(IDeleteGuard guard, AppLog log, Func<string, long> quotaFor)
+    { _guard = guard; _measureGuard = guard as SafetyGuard ?? new SafetyGuard(Array.Empty<string>()); _log = log; _quotaFor = quotaFor; }
 
     private static bool IsFixedDrive(string root)
     {
@@ -106,7 +107,7 @@ public sealed class Deleter
             try
             {
                 Report(path);
-                long size = isDir ? StorageScanner.DirSize(path, _guard, ct, null).Bytes : new FileInfo(path).Length;
+                long size = isDir ? StorageScanner.DirSize(path, _measureGuard, ct, null).Bytes : new FileInfo(path).Length;
                 if (ct.IsCancellationRequested) return; // số đo có thể dở dang: không xóa mục này
 
                 var root = Path.GetPathRoot(path) ?? "";

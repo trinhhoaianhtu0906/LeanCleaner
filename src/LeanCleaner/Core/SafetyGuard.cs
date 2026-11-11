@@ -5,7 +5,7 @@ using System.Runtime.CompilerServices;
 namespace LeanCleaner.Core;
 
 /// <summary>Cổng an toàn duy nhất: mọi thao tác xóa đều phải được SafetyGuard chấp thuận.</summary>
-public sealed class SafetyGuard
+public sealed class SafetyGuard : IDeleteGuard
 {
     private readonly List<string> _excluded;
     private readonly List<string> _forbiddenExact;
@@ -30,6 +30,7 @@ public sealed class SafetyGuard
         reason = "";
         if (!IsWellFormed(path)) { reason = "Đường dẫn không hợp lệ"; return false; }
         if (rule.ReportOnly) { reason = "Chỉ báo cáo"; return false; }
+        if (rule.NeedsAdmin) { reason = "Cần quyền admin"; return false; }
 
         string full;
         try { full = Normalize(path); }
@@ -90,7 +91,7 @@ public sealed class SafetyGuard
     }
 
     /// <summary>Đường dẫn phải đầy đủ, không phải dạng device, không chứa ký tự không hợp lệ, wildcard hoặc ':' (ADS).</summary>
-    private static bool IsWellFormed(string? path)
+    internal static bool IsWellFormed(string? path)
     {
         if (string.IsNullOrWhiteSpace(path)) return false;
         var p = path.Replace('/', '\\');
