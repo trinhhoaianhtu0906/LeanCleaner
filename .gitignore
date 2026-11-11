@@ -1,0 +1,13 @@
+bin/
+obj/
+publish/
+.vs/
+*.user
+TestResults/
+.superpowers/
+publish-sc/
+dist/
+
+# design notes / generated previews stay local
+docs/
+installer/icon-preview.png
