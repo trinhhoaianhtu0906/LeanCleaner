@@ -38,7 +38,15 @@ public sealed record AdminRequest(IReadOnlyList<AdminOp> Ops, IReadOnlyList<stri
             if (dto?.Ops is null || dto.Ops.Count == 0) return null;
             var vhdx = dto.Vhdx ?? new List<string?>();
             if (vhdx.Any(v => v is null)) return null;
-            return new AdminRequest(dto.Ops.ToArray(), vhdx.Select(v => v!).ToArray());
+            var names = Enum.GetNames<AdminOp>();
+            var ops = new List<AdminOp>();
+            foreach (var name in dto.Ops)
+            {
+                // Chỉ nhận đúng tên (phân biệt hoa/thường); từ chối số, danh sách phẩy, khoảng trắng thừa.
+                if (name is null || Array.IndexOf(names, name) < 0) return null;
+                ops.Add(Enum.Parse<AdminOp>(name));
+            }
+            return new AdminRequest(ops, vhdx.Select(v => v!).ToArray());
         }
         catch (Exception e) when (e is JsonException or NotSupportedException or ArgumentException or InvalidOperationException)
         {
@@ -76,7 +84,7 @@ public sealed record AdminRequest(IReadOnlyList<AdminOp> Ops, IReadOnlyList<stri
     /// <summary>Dạng trung gian cho phép phát hiện trường thiếu/null khi đọc JSON.</summary>
     private sealed class Dto
     {
-        public List<AdminOp>? Ops { get; set; }
+        public List<string?>? Ops { get; set; }
         public List<string?>? Vhdx { get; set; }
     }
 }
