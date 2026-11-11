@@ -79,7 +79,8 @@ public sealed class StorageScanner
         if (_guard.IsExcluded(t.Dir) || IsReparse(t.Dir)) return;
         var st = DirSize(t.Dir, _guard, ct, onDir);
         if (ct.IsCancellationRequested) return;
-        if (st.Bytes > 0) items.Add(new ScanItem(t.Rule, t.Dir, st.Bytes, true, true));
+        /// Gốc cần admin: luôn liệt kê dù đo được 0 byte (user thường bị Access denied), helper nâng quyền vẫn dọn được.
+        if (st.Bytes > 0 || t.Rule.NeedsAdmin) items.Add(new ScanItem(t.Rule, t.Dir, st.Bytes, true, true));
     }
 
     private void ScanChildren(RuleTarget t, List<ScanItem> items, CancellationToken ct, Action<string> onDir)

@@ -142,7 +142,7 @@ public class DiskPanel : UserControl
                 if (it.Rule.ReportOnly) text += it.Rule.Op == AdminOp.CompactVhdx ? " — dùng nút Thu gọn ổ ảo" : " — chỉ xem (cần admin)";
             }
             var risk = it.Rule.NeedsAdmin ? "🛡 Admin" : it.Rule.Risk switch { RiskLevel.Low => "Thấp", RiskLevel.Medium => "Vừa", _ => "—" };
-            var li = new ListViewItem(new[] { text, Fmt.Bytes(it.Bytes), risk }) { Tag = it, Group = groups[it.Rule.Group] };
+            var li = new ListViewItem(new[] { text, it.Rule.NeedsAdmin && it.Bytes == 0 ? "? (cần admin để đo)" : Fmt.Bytes(it.Bytes), risk }) { Tag = it, Group = groups[it.Rule.Group] };
             if (it.Rule.ReportOnly) li.ForeColor = SystemColors.GrayText;
             else li.Checked = preCheck && it.Rule.PreChecked;
             _list.Items.Add(li);

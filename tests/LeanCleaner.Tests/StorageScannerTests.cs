@@ -209,4 +209,24 @@ public sealed class StorageScannerTests : IDisposable
         // Temp bình thường vẫn có
         Assert.Contains(JunkRules.Build(s, _dirs), t => t.Dir == _dirs.Temp);
     }
+
+    [Fact]
+    public async Task AdminRoot_EmptyOrUnreadable_StillListed()
+    {
+        var lkr = Path.Combine(_dirs.WinDir, "LiveKernelReports");
+        Directory.CreateDirectory(lkr);
+        var r = await Scanner().ScanAsync(null, CancellationToken.None);
+        var item = Assert.Single(r.Items, i => i.Path == lkr);
+        Assert.Equal(0, item.Bytes);
+        Assert.True(item.Rule.NeedsAdmin);
+    }
+
+    [Fact]
+    public async Task NonAdminWholeDir_Empty_NotListed()
+    {
+        var d3d = Path.Combine(_dirs.LocalAppData, "D3DSCache");
+        Directory.CreateDirectory(d3d);
+        var r = await Scanner().ScanAsync(null, CancellationToken.None);
+        Assert.DoesNotContain(r.Items, i => i.Path == d3d);
+    }
 }
