@@ -19,6 +19,8 @@ public sealed class ElevatedLauncher
         try
         {
             if (dir.Contains('"')) throw new ArgumentException("Đường dẫn ipc không hợp lệ", nameof(req));
+            // Thư mục Guid mới: helper tạo result.json bằng CREATE_NEW nên không được có file cũ.
+            if (Directory.Exists(dir)) throw new IOException("Thư mục ipc đã tồn tại");
             Directory.CreateDirectory(dir);
             var path = Path.Combine(dir, "request.json");
             await File.WriteAllTextAsync(path, req.ToJson());
@@ -41,13 +43,21 @@ public sealed class ElevatedLauncher
                 AdminResult? r = null;
                 try { r = AdminResult.Parse(await File.ReadAllTextAsync(Path.Combine(dir, "result.json"))); }
                 catch (Exception e) when (e is IOException or UnauthorizedAccessException) { /* thiếu file */ }
-                return r ?? new AdminResult(0, 0, Array.Empty<SkipInfo>(), Array.Empty<CompactInfo>(),
-                                            $"Tiến trình admin lỗi (mã {p.ExitCode})");
+                return Complete(r, p.ExitCode);
             }
         }
         finally
         {
             try { Directory.Delete(dir, true); } catch (Exception) { /* bỏ qua */ }
         }
+    }
+
+    /// <summary>Ghi các dòng log của helper (đã làm sạch) vào log thật; thiếu kết quả hoặc mã thoát khác 0 mà không có lỗi thì điền lỗi "Tiến trình admin lỗi (mã X)".</summary>
+    internal AdminResult Complete(AdminResult? r, int exitCode)
+    {
+        var error = $"Tiến trình admin lỗi (mã {exitCode})";
+        if (r is null) return new AdminResult(0, 0, Array.Empty<SkipInfo>(), Array.Empty<CompactInfo>(), error);
+        _log.WriteForeignLines(r.Log);
+        return exitCode != 0 && r.Error is null ? r with { Error = error } : r;
     }
 }

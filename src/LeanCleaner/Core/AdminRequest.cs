@@ -25,10 +25,13 @@ public sealed record AdminRequest(IReadOnlyList<AdminOp> Ops, IReadOnlyList<stri
     /// <summary>Thông báo lý do loại đường dẫn vhdx không hợp lệ.</summary>
     private const string NotAllowed = "Không nằm trong danh sách ổ ảo hợp lệ";
 
+    /// <summary>Các thư mục người dùng loại trừ (chỉ có thể thu hẹp phạm vi xóa); thiếu trong JSON thì rỗng.</summary>
+    public IReadOnlyList<string> Excluded { get; init; } = Array.Empty<string>();
+
     /// <summary>Chuyển yêu cầu thành chuỗi JSON.</summary>
     public string ToJson() => JsonSerializer.Serialize(this, AdminJson.Options);
 
-    /// <summary>Đọc yêu cầu từ JSON; trả về null (không bao giờ ném) nếu sai định dạng, thiếu/rỗng ops, op lạ hoặc vhdx không phải mảng chuỗi.</summary>
+    /// <summary>Đọc yêu cầu từ JSON; trả về null (không bao giờ ném) nếu sai định dạng, thiếu/rỗng ops, op lạ, vhdx/excluded không phải mảng chuỗi hoặc có phần tử null; mục excluded sai dạng bị bỏ qua.</summary>
     public static AdminRequest? Parse(string json)
     {
         if (string.IsNullOrWhiteSpace(json)) return null;
@@ -38,6 +41,8 @@ public sealed record AdminRequest(IReadOnlyList<AdminOp> Ops, IReadOnlyList<stri
             if (dto?.Ops is null || dto.Ops.Count == 0) return null;
             var vhdx = dto.Vhdx ?? new List<string?>();
             if (vhdx.Any(v => v is null)) return null;
+            var excluded = dto.Excluded ?? new List<string?>();
+            if (excluded.Any(v => v is null)) return null;
             var names = Enum.GetNames<AdminOp>();
             var ops = new List<AdminOp>();
             foreach (var name in dto.Ops)
@@ -46,7 +51,8 @@ public sealed record AdminRequest(IReadOnlyList<AdminOp> Ops, IReadOnlyList<stri
                 if (name is null || Array.IndexOf(names, name) < 0) return null;
                 ops.Add(Enum.Parse<AdminOp>(name));
             }
-            return new AdminRequest(ops, vhdx.Select(v => v!).ToArray());
+            return new AdminRequest(ops, vhdx.Select(v => v!).ToArray())
+                { Excluded = excluded.Where(SafetyGuard.IsWellFormed).Select(v => v!).ToArray() };
         }
         catch (Exception e) when (e is JsonException or NotSupportedException or ArgumentException or InvalidOperationException)
         {
@@ -86,6 +92,7 @@ public sealed record AdminRequest(IReadOnlyList<AdminOp> Ops, IReadOnlyList<stri
     {
         public List<string?>? Ops { get; set; }
         public List<string?>? Vhdx { get; set; }
+        public List<string?>? Excluded { get; set; }
     }
 }
 
@@ -109,10 +116,13 @@ public sealed record CompactInfo(string Path, long Before, long After, string? E
 /// <param name="Error">Lỗi chung (ví dụ chưa có quyền admin), null nếu không có.</param>
 public sealed record AdminResult(long RecycledBytes, int Succeeded, IReadOnlyList<SkipInfo> Skipped, IReadOnlyList<CompactInfo> Compacted, string? Error)
 {
+    /// <summary>Các dòng nhật ký helper ghi trong bộ nhớ; app thường làm sạch rồi ghi vào log.txt. Thiếu trong JSON thì rỗng.</summary>
+    public IReadOnlyList<string> Log { get; init; } = Array.Empty<string>();
+
     /// <summary>Chuyển kết quả thành chuỗi JSON.</summary>
     public string ToJson() => JsonSerializer.Serialize(this, AdminJson.Options);
 
-    /// <summary>Đọc kết quả từ JSON; trả về null (không ném) nếu không hợp lệ.</summary>
+    /// <summary>Đọc kết quả từ JSON; trả về null (không ném) nếu không hợp lệ hoặc log có phần tử null.</summary>
     public static AdminResult? Parse(string json)
     {
         if (string.IsNullOrWhiteSpace(json)) return null;
@@ -120,7 +130,9 @@ public sealed record AdminResult(long RecycledBytes, int Succeeded, IReadOnlyLis
         {
             var r = JsonSerializer.Deserialize<AdminResult>(json, AdminJson.Options);
             if (r is null) return null;
-            return r with { Skipped = r.Skipped ?? Array.Empty<SkipInfo>(), Compacted = r.Compacted ?? Array.Empty<CompactInfo>() };
+            var log = r.Log ?? Array.Empty<string>();
+            if (log.Any(l => l is null)) return null;
+            return r with { Skipped = r.Skipped ?? Array.Empty<SkipInfo>(), Compacted = r.Compacted ?? Array.Empty<CompactInfo>(), Log = log };
         }
         catch (Exception e) when (e is JsonException or NotSupportedException or ArgumentException or InvalidOperationException)
         {

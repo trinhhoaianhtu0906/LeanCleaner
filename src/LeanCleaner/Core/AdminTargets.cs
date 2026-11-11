@@ -31,14 +31,23 @@ public static class AdminTargets
                             NeedsAdmin: true, Op: op);
     }
 
-    /// <summary>Tìm các file .vhdx của Docker (Docker\wsl) và WSL (Packages\*\LocalState\ext4.vhdx), bỏ qua liên kết.</summary>
+    /// <summary>True nếu thư mục là reparse point hoặc không đọc được thuộc tính (coi như không an toàn).</summary>
+    private static bool IsReparseOrUnknown(string dir)
+    {
+        try { return new DirectoryInfo(dir).Attributes.HasFlag(FileAttributes.ReparsePoint); }
+        catch (Exception) { return true; }
+    }
+
+    /// <summary>Tìm các file .vhdx của Docker (Docker\wsl) và WSL (Packages\*\LocalState\ext4.vhdx), bỏ qua liên kết (kể cả khi chính thư mục gốc Docker, Docker\wsl, Packages là liên kết).</summary>
     public static IReadOnlyList<string> FindVhdx(KnownDirs d, CancellationToken ct = default)
     {
         var vhdx = new List<string>();
-        var docker = Path.Combine(d.LocalAppData, "Docker", "wsl");
+        var dockerRoot = Path.Combine(d.LocalAppData, "Docker");
+        var docker = Path.Combine(dockerRoot, "wsl");
         try
         {
-            if (!ct.IsCancellationRequested && Directory.Exists(docker))
+            if (!ct.IsCancellationRequested && Directory.Exists(docker)
+                && !IsReparseOrUnknown(dockerRoot) && !IsReparseOrUnknown(docker))
                 foreach (var f in Directory.EnumerateFiles(docker, "*.vhdx", new EnumerationOptions
                 { RecurseSubdirectories = true, IgnoreInaccessible = true, AttributesToSkip = FileAttributes.ReparsePoint }))
                 {
@@ -50,7 +59,7 @@ public static class AdminTargets
         var packages = Path.Combine(d.LocalAppData, "Packages");
         try
         {
-            if (!ct.IsCancellationRequested && Directory.Exists(packages))
+            if (!ct.IsCancellationRequested && Directory.Exists(packages) && !IsReparseOrUnknown(packages))
                 foreach (var pkg in Directory.EnumerateDirectories(packages, "*", PackageOpts))
                 {
                     if (ct.IsCancellationRequested) break;

@@ -64,19 +64,19 @@ public sealed class DiskpartCompactor : IVhdxCompactor
         }
     }
 
-    /// <summary>Ghi script vào file mới rồi đóng, mở lại chỉ-đọc (chặn ghi/xóa) và kiểm tra nội dung trước khi chạy diskpart; trả về mã thoát, hoặc null nếu quá thời gian (đã kill).</summary>
+    /// <summary>Ghi script vào file mới (CREATE_NEW, không theo liên kết, kiểm tra đường dẫn cuối) rồi đóng, mở lại chỉ-đọc (chặn ghi/xóa, không theo liên kết) và kiểm tra nội dung trước khi chạy diskpart; trả về mã thoát, hoặc null nếu quá thời gian (đã kill).</summary>
     private int? RunScript(string content, TimeSpan timeout)
     {
         var script = Path.Combine(_workDir, "compact-" + Guid.NewGuid().ToString("N") + ".txt");
         try
         {
-            using (var ws = new FileStream(script, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+            using (var ws = SecureIpc.CreateNew(script))
             using (var w = new StreamWriter(ws, new System.Text.UTF8Encoding(false)))
             {
                 w.Write(content);
                 w.Flush();
             }
-            using var rs = new FileStream(script, FileMode.Open, FileAccess.Read, FileShare.Read);
+            using var rs = SecureIpc.OpenReadNoReparse(script);
             using (var r = new StreamReader(rs, new System.Text.UTF8Encoding(false), false, 1024, leaveOpen: true))
             {
                 if (!string.Equals(r.ReadToEnd(), content, StringComparison.Ordinal))

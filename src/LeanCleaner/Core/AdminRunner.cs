@@ -8,14 +8,23 @@ public static class AdminRunner
     private static readonly IReadOnlyList<SkipInfo> NoSkips = Array.Empty<SkipInfo>();
     private static readonly IReadOnlyList<CompactInfo> NoCompact = Array.Empty<CompactInfo>();
 
-    /// <summary>Chạy helper với môi trường thật; trả về mã thoát (0 ok, 1 lỗi bất ngờ, 2 chưa admin, 3 yêu cầu sai).</summary>
+    /// <summary>Chạy helper với môi trường thật; trả về mã thoát (0 ok, 1 lỗi bất ngờ, 2 chưa admin, 3 yêu cầu sai hoặc thư mục ipc không an toàn).</summary>
     public static int Run(string requestPath)
     {
-        string workDir;
-        try { workDir = Path.GetDirectoryName(requestPath)!; }
+        SecureIpc.EnforceRedirectionTrust();
+        return RunInIpcDir(requestPath, dir =>
+            Run(requestPath, KnownDirs.Current(), IsElevated, new DiskpartCompactor(dir)));
+    }
+
+    /// <summary>Mở và giữ handle thư mục ipc (không theo liên kết, chặn đổi tên/xóa) trong suốt lúc chạy <paramref name="body"/>; thư mục là liên kết hoặc không mở được thì trả 3 và không ghi gì.</summary>
+    internal static int RunInIpcDir(string requestPath, Func<string, int> body)
+    {
+        string dir;
+        try { dir = SafetyGuard.Normalize(Path.GetDirectoryName(SafetyGuard.Normalize(requestPath))!); }
         catch (Exception) { return 3; }
-        return Run(requestPath, KnownDirs.Current(), new AppLog(AppLog.DefaultFilePath), IsElevated,
-                   new DiskpartCompactor(workDir));
+        using var handle = SecureIpc.OpenDirNoReparse(dir);
+        if (handle is null) return 3;
+        return body(dir);
     }
 
     private static bool IsElevated()
@@ -24,16 +33,18 @@ public static class AdminRunner
         return new WindowsPrincipal(id).IsInRole(WindowsBuiltInRole.Administrator);
     }
 
-    /// <summary>Phần lõi có thể thay thế phụ thuộc để kiểm thử; không bao giờ ném ra ngoài.</summary>
-    internal static int Run(string requestPath, KnownDirs d, AppLog log, Func<bool> isElevated,
+    /// <summary>Phần lõi có thể thay thế phụ thuộc để kiểm thử; nhật ký chỉ giữ trong bộ nhớ và trả về trong result.json (tạo mới, không theo liên kết); không bao giờ ném ra ngoài.</summary>
+    internal static int Run(string requestPath, KnownDirs d, Func<bool> isElevated,
                             IVhdxCompactor compactor, Func<string, long>? quotaFor = null)
     {
         string resultPath;
-        try { resultPath = Path.Combine(Path.GetDirectoryName(requestPath)!, "result.json"); }
+        try { resultPath = Path.Combine(Path.GetDirectoryName(SafetyGuard.Normalize(requestPath))!, "result.json"); }
         catch (Exception) { return 3; }
+        var log = AppLog.CreateInMemory();
         void Write(AdminResult r)
         {
-            try { File.WriteAllText(resultPath, r.ToJson()); } catch (Exception) { /* vẫn trả mã thoát */ }
+            try { SecureIpc.TryWriteNew(resultPath, (r with { Log = log.Lines }).ToJson()); }
+            catch (Exception) { /* vẫn trả mã thoát */ }
         }
 
         try
@@ -63,7 +74,7 @@ public static class AdminRunner
             }
             if (items.Count > 0)
             {
-                var guard = new AdminGuard(d);
+                var guard = new AdminGuard(d, req.Excluded);
                 var deleter = quotaFor is null ? new Deleter(guard, log) : new Deleter(guard, log, quotaFor);
                 var res = deleter.RecycleAsync(items, CancellationToken.None).GetAwaiter().GetResult();
                 bytes = res.BytesRecycled;

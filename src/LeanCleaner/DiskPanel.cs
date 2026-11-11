@@ -195,7 +195,9 @@ public class DiskPanel : UserControl
                 _progress.Text = "Đang chờ tiến trình admin…";
                 AdminResult? ar = null;
                 var failed = false;
-                try { ar = await new ElevatedLauncher(_log).RunAsync(new AdminRequest(admin.Select(i => i.Rule.Op!.Value).Distinct().ToList(), Array.Empty<string>())); }
+                var req = new AdminRequest(admin.Select(i => i.Rule.Op!.Value).Distinct().ToList(), Array.Empty<string>())
+                    { Excluded = _settings.ExcludedPaths.ToList() };
+                try { ar = await new ElevatedLauncher(_log).RunAsync(req); }
                 catch (Exception ex) when (ex is not OperationCanceledException) { failed = true; extra.Add("Lỗi admin: " + ex.Message); }
                 SetBusy(true);
                 if (failed) { /* đã ghi lỗi; vẫn hiện tóm tắt và quét lại */ }
@@ -247,7 +249,10 @@ public class DiskPanel : UserControl
                 var name = Path.GetFileName(c.Path);
                 lines.Add(c.Error is null ? $"{name}: {Fmt.Bytes(c.Before)} → {Fmt.Bytes(c.After)}" : $"{name}: lỗi — {c.Error}");
             }
-            if (ar.Error is not null) lines.Add(ar.Error);
+            foreach (var s in ar.Skipped.Take(10)) lines.Add($"• {s.Path}: {s.Reason}");
+            if (ar.Skipped.Count > 10) lines.Add("…");
+            if (ar.Error is not null) lines.Add("Lỗi admin: " + ar.Error);
+            if (lines.Count == 0) lines.Add("Không có ổ ảo nào được thu gọn.");
         }
         MessageBox.Show(this, string.Join(Environment.NewLine, lines), "LeanCleaner");
         if (ar is not null) ResetList("Đã thu gọn — hãy quét lại");

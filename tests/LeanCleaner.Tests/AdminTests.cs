@@ -188,6 +188,124 @@ public sealed class AdminTests : IDisposable
     }
 
     [Fact]
+    public void FindVhdx_RejectsJunctionedRoots()
+    {
+        var outside = Path.Combine(_base, "outsideRoot");
+        Directory.CreateDirectory(Path.Combine(outside, "wsl", "disk"));
+        File.WriteAllText(Path.Combine(outside, "wsl", "disk", "evil.vhdx"), "x");
+        var dockerLink = Path.Combine(_d.LocalAppData, "Docker");
+        Junction(dockerLink, outside);
+
+        var pkgOutside = Path.Combine(_base, "outsidePkgs");
+        Directory.CreateDirectory(Path.Combine(pkgOutside, "Evil_1", "LocalState"));
+        File.WriteAllText(Path.Combine(pkgOutside, "Evil_1", "LocalState", "ext4.vhdx"), "x");
+        var pkgLink = Path.Combine(_d.LocalAppData, "Packages");
+        Junction(pkgLink, pkgOutside);
+
+        Assert.Empty(AdminTargets.FindVhdx(_d));
+        Directory.Delete(dockerLink);
+        Directory.Delete(pkgLink);
+
+        // Docker thật nhưng Docker\wsl là junction.
+        Directory.CreateDirectory(dockerLink);
+        var wslLink = Path.Combine(dockerLink, "wsl");
+        Junction(wslLink, Path.Combine(outside, "wsl"));
+        Assert.Empty(AdminTargets.FindVhdx(_d));
+        Directory.Delete(wslLink);
+    }
+
+    [Fact]
+    public void AdminGuard_RejectsExcludedChildAndAncestorOfExcluded()
+    {
+        var root = AdminTargets.RootOf(AdminOp.WinTemp, _d);
+        var keep = Path.Combine(root, "keep");
+        var parent = Path.Combine(root, "parent");
+        var other = Path.Combine(root, "other.tmp");
+        Directory.CreateDirectory(keep);
+        Directory.CreateDirectory(Path.Combine(parent, "inner"));
+        File.WriteAllText(other, "x");
+        var g = new AdminGuard(_d, new[] { keep, Path.Combine(parent, "inner") });
+        Assert.False(g.IsDeletable(keep, R(AdminOp.WinTemp), out var reason));
+        Assert.Equal("Nằm trong thư mục loại trừ", reason);
+        Assert.False(g.IsDeletable(parent, R(AdminOp.WinTemp), out reason));
+        Assert.Equal("Nằm trong thư mục loại trừ", reason);
+        Assert.True(g.IsDeletable(other, R(AdminOp.WinTemp), out reason), reason);
+    }
+
+    [Fact]
+    public void SecureIpc_OpenDir_RefusesJunction_AllowsRealDir()
+    {
+        var real = Path.Combine(_base, "ipcReal");
+        Directory.CreateDirectory(real);
+        using (var h = SecureIpc.OpenDirNoReparse(real)) Assert.NotNull(h);
+
+        var link = Path.Combine(_base, "ipcLink");
+        Junction(link, real);
+        Assert.Null(SecureIpc.OpenDirNoReparse(link));
+        // Thư mục con thật nằm dưới cha là junction: đường dẫn cuối khác → từ chối.
+        Directory.CreateDirectory(Path.Combine(real, "sub"));
+        Assert.Null(SecureIpc.OpenDirNoReparse(Path.Combine(link, "sub")));
+        Assert.Null(SecureIpc.OpenDirNoReparse(Path.Combine(_base, "missing")));
+        Directory.Delete(link);
+    }
+
+    [Fact]
+    public void SecureIpc_OpenDir_BlocksRenameWhileHeld()
+    {
+        var parent = Path.Combine(_base, "ipcParent");
+        var real = Path.Combine(parent, "ipcHeld");
+        Directory.CreateDirectory(real);
+        using (var h = SecureIpc.OpenDirNoReparse(real))
+        {
+            Assert.NotNull(h);
+            Assert.ThrowsAny<SystemException>(() => Directory.Move(real, real + "-moved"));
+            Assert.ThrowsAny<SystemException>(() => Directory.Move(parent, parent + "-moved"));
+        }
+        Directory.Move(real, real + "-moved");
+    }
+
+    [Fact]
+    public void Runner_JunctionedIpcDir_Exit3_NothingWritten()
+    {
+        var target = Path.Combine(_base, "ipcTarget");
+        Directory.CreateDirectory(target);
+        var link = Path.Combine(_base, "ipcJ");
+        Junction(link, target);
+        var called = false;
+        Assert.Equal(3, AdminRunner.RunInIpcDir(Path.Combine(link, "request.json"), _ => { called = true; return 0; }));
+        Assert.False(called);
+        Assert.Empty(Directory.GetFileSystemEntries(target));
+        Directory.Delete(link);
+
+        var real = Path.Combine(_base, "ipcOk");
+        Directory.CreateDirectory(real);
+        string? seen = null;
+        Assert.Equal(7, AdminRunner.RunInIpcDir(Path.Combine(real, "request.json"), dir => { seen = dir; return 7; }));
+        Assert.Equal(real, seen, ignoreCase: true);
+    }
+
+    [Fact]
+    public void SecureIpc_CreateNew_RefusesExistingAndLinkedName()
+    {
+        var dir = Path.Combine(_base, "ipcNew");
+        Directory.CreateDirectory(dir);
+        var p = Path.Combine(dir, "result.json");
+        Assert.True(SecureIpc.TryWriteNew(p, "một"));
+        Assert.Equal("một", File.ReadAllText(p));
+        Assert.False(SecureIpc.TryWriteNew(p, "hai"));
+        Assert.Equal("một", File.ReadAllText(p));
+
+        // Junction mang tên file đích: CREATE_NEW thất bại, không ghi qua liên kết.
+        var victim = Path.Combine(_base, "victim");
+        Directory.CreateDirectory(victim);
+        var lp = Path.Combine(dir, "compact-x.txt");
+        Junction(lp, victim);
+        Assert.False(SecureIpc.TryWriteNew(lp, "x"));
+        Assert.Empty(Directory.GetFileSystemEntries(victim));
+        Directory.Delete(lp);
+    }
+
+    [Fact]
     public void Build_AdminRulesAreCheckableWholeDir()
     {
         var vhdxDir = Path.Combine(_d.LocalAppData, "Docker", "wsl", "disk");
@@ -280,6 +398,60 @@ public sealed class AdminProtocolTests
     }
 
     [Fact]
+    public void Result_Log_RoundTrip_MissingEmpty_NullElementRejected()
+    {
+        var r = new AdminResult(1, 1, Array.Empty<SkipInfo>(), Array.Empty<CompactInfo>(), null) { Log = new[] { "a\tb", "c" } };
+        var json = r.ToJson();
+        Assert.Contains("\"log\"", json);
+        Assert.Equal(r.Log, AdminResult.Parse(json)!.Log);
+        Assert.Empty(AdminResult.Parse("{\"recycledBytes\":0,\"succeeded\":0}")!.Log);
+        Assert.Empty(AdminResult.Parse("{\"recycledBytes\":0,\"succeeded\":0,\"log\":null}")!.Log);
+        Assert.Null(AdminResult.Parse("{\"recycledBytes\":0,\"succeeded\":0,\"log\":[\"x\",null]}"));
+    }
+
+    [Fact]
+    public void Request_Excluded_RoundTrip_MissingEmpty_NullRejected_MalformedIgnored()
+    {
+        var r = new AdminRequest(new[] { AdminOp.WinTemp }, Array.Empty<string>()) { Excluded = new[] { @"C:\Keep" } };
+        var back = AdminRequest.Parse(r.ToJson());
+        Assert.Equal(new[] { @"C:\Keep" }, back!.Excluded);
+        Assert.Empty(AdminRequest.Parse("{\"ops\":[\"WinTemp\"]}")!.Excluded);
+        Assert.Null(AdminRequest.Parse("{\"ops\":[\"WinTemp\"],\"excluded\":[null]}"));
+        Assert.Null(AdminRequest.Parse("{\"ops\":[\"WinTemp\"],\"excluded\":\"x\"}"));
+        var m = AdminRequest.Parse("{\"ops\":[\"WinTemp\"],\"excluded\":[\"relative\",\"C:\\\\a*\",\"C:\\\\Ok\"]}");
+        Assert.Equal(new[] { @"C:\Ok" }, m!.Excluded);
+    }
+
+    [Fact]
+    public void Log_SanitizeForeign_StripsControlCharsAndCaps()
+    {
+        Assert.Equal("a  b\tc d", AppLog.SanitizeForeign("a\r\nb\tc\u0007d"));
+        Assert.Equal("x y", AppLog.SanitizeForeign("x\u2028y"));
+        Assert.Equal(AppLog.MaxForeignLineLength, AppLog.SanitizeForeign(new string('z', 5000)).Length);
+        Assert.Equal("", AppLog.SanitizeForeign(null));
+    }
+
+    [Fact]
+    public void Launcher_Complete_AppendsSanitizedLog_AndFillsErrorOnNonZeroExit()
+    {
+        var path = Path.Combine(Path.GetTempPath(), "lc-launch-" + Guid.NewGuid().ToString("N") + ".txt");
+        try
+        {
+            var launcher = new ElevatedLauncher(new AppLog(path));
+            var r = new AdminResult(0, 0, Array.Empty<SkipInfo>(), Array.Empty<CompactInfo>(), null)
+                { Log = new[] { "dòng1\r\nGIẢ MẠO", "dòng2" } };
+            var ok = launcher.Complete(r, 0);
+            Assert.Null(ok.Error);
+            Assert.Equal(new[] { "dòng1  GIẢ MẠO", "dòng2" }, File.ReadAllLines(path));
+
+            Assert.Equal("Tiến trình admin lỗi (mã 5)", launcher.Complete(r, 5).Error);
+            Assert.Equal("riêng", launcher.Complete(r with { Error = "riêng" }, 5).Error);
+            Assert.Equal("Tiến trình admin lỗi (mã 1)", launcher.Complete(null, 1).Error);
+        }
+        finally { try { File.Delete(path); } catch { } }
+    }
+
+    [Fact]
     public void FilterVhdx_DropsOutsidePaths()
     {
         var a = @"C:\Users\u\AppData\Local\Docker\wsl\disk\docker_data.vhdx";
@@ -317,7 +489,7 @@ public sealed class AdminRunnerTests : IDisposable
     private readonly string _base = Path.Combine(Path.GetTempPath(), "lc-runner-" + Guid.NewGuid().ToString("N"));
     private readonly KnownDirs _d;
     private readonly string _ipc;
-    private readonly AppLog _log;
+    private readonly string _logPath;
 
     public AdminRunnerTests()
     {
@@ -330,7 +502,7 @@ public sealed class AdminRunnerTests : IDisposable
         _d = new KnownDirs(user, local, Path.Combine(_base, "UserTemp"), win);
         _ipc = Path.Combine(_base, "ipc");
         Directory.CreateDirectory(_ipc);
-        _log = new AppLog(Path.Combine(_base, "log.txt"));
+        _logPath = Path.Combine(_base, "log.txt");
     }
 
     /// <summary>Xóa cây tạm.</summary>
@@ -347,7 +519,7 @@ public sealed class AdminRunnerTests : IDisposable
         AdminResult.Parse(File.ReadAllText(Path.Combine(_ipc, "result.json")))!;
 
     private int Run(string req, bool elevated, FakeCompactor c) =>
-        AdminRunner.Run(req, _d, _log, () => elevated, c, _ => long.MaxValue);
+        AdminRunner.Run(req, _d, () => elevated, c, _ => long.MaxValue);
 
     private string Vhdx(string rel)
     {
@@ -421,6 +593,53 @@ public sealed class AdminRunnerTests : IDisposable
         Assert.Equal(1, c.Shutdowns);
         Assert.Equal(2, c.Compacted.Count);
         Assert.Equal(2, ReadResult().Compacted.Count);
+    }
+
+    [Fact]
+    public void Runner_ReturnsLogInResult_RealLogUntouched()
+    {
+        var real = AppLog.DefaultFilePath;
+        var before = File.Exists(real) ? new FileInfo(real).Length : -1;
+        var root = AdminTargets.RootOf(AdminOp.LiveKernelReports, _d);
+        File.WriteAllText(Path.Combine(root, "a.dmp"), "aaaa");
+        var v = Vhdx(@"Docker\wsl\disk\a.vhdx");
+        var req = WriteRequest(new AdminRequest(new[] { AdminOp.LiveKernelReports, AdminOp.CompactVhdx }, new[] { v }).ToJson());
+
+        Assert.Equal(0, Run(req, true, new FakeCompactor()));
+        var r = ReadResult();
+        Assert.Contains(r.Log, l => l.Contains("\tRECYCLE\t") && l.Contains("a.dmp"));
+        Assert.Contains(r.Log, l => l.Contains("\tCOMPACT\t") && l.Contains("a.vhdx"));
+        Assert.False(File.Exists(_logPath));
+        Assert.Equal(before, File.Exists(real) ? new FileInfo(real).Length : -1);
+    }
+
+    [Fact]
+    public void Runner_ResultAlreadyExists_NotOverwritten()
+    {
+        var req = WriteRequest(new AdminRequest(new[] { AdminOp.LiveKernelReports }, Array.Empty<string>()).ToJson());
+        var resultPath = Path.Combine(_ipc, "result.json");
+        File.WriteAllText(resultPath, "cũ");
+        Assert.Equal(0, Run(req, true, new FakeCompactor()));
+        Assert.Equal("cũ", File.ReadAllText(resultPath));
+    }
+
+    [Fact]
+    public void Runner_ExcludedChild_NotRecycled()
+    {
+        var root = AdminTargets.RootOf(AdminOp.WinTemp, _d);
+        var keep = Path.Combine(root, "keep");
+        Directory.CreateDirectory(keep);
+        File.WriteAllText(Path.Combine(keep, "k.txt"), "k");
+        var gone = Path.Combine(root, "gone.tmp");
+        File.WriteAllText(gone, "g");
+        var req = WriteRequest((new AdminRequest(new[] { AdminOp.WinTemp }, Array.Empty<string>()) { Excluded = new[] { keep } }).ToJson());
+
+        Assert.Equal(0, Run(req, true, new FakeCompactor()));
+        Assert.True(Directory.Exists(keep));
+        Assert.False(File.Exists(gone));
+        var r = ReadResult();
+        Assert.Equal(1, r.Succeeded);
+        Assert.Contains(r.Skipped, s => s.Path == keep && s.Reason == "Nằm trong thư mục loại trừ");
     }
 
     [Fact]
