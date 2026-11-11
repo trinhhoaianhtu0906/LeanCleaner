@@ -183,3 +183,85 @@ public sealed class AdminTests : IDisposable
         Assert.Equal(TargetKind.ReportOnlySize, v.Kind);
     }
 }
+
+/// <summary>Kiểm thử giao thức request/result giữa app thường và helper admin.</summary>
+public sealed class AdminProtocolTests
+{
+    [Fact]
+    public void Request_RoundTrip()
+    {
+        var r = new AdminRequest(new[] { AdminOp.WinTemp, AdminOp.CompactVhdx }, new[] { @"C:\a\b.vhdx" });
+        var json = r.ToJson();
+        Assert.Contains("\"ops\"", json);
+        Assert.Contains("\"WinTemp\"", json);
+        var back = AdminRequest.Parse(json);
+        Assert.NotNull(back);
+        Assert.Equal(r.Ops, back!.Ops);
+        Assert.Equal(r.Vhdx, back.Vhdx);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("not json")]
+    [InlineData("{")]
+    [InlineData("null")]
+    [InlineData("[]")]
+    [InlineData("{\"ops\":[1]}")]
+    [InlineData("{\"ops\":[null]}")]
+    [InlineData("{\"ops\":[\"WinTemp\"],\"vhdx\":[null]}")]
+    [InlineData("{\"ops\":[\"WinTemp\"],\"vhdx\":\"x\"}")]
+    [InlineData("{\"ops\":[\"WinTemp\"],\"vhdx\":[1]}")]
+    public void Request_InvalidJson_Null(string json) => Assert.Null(AdminRequest.Parse(json));
+
+    [Fact]
+    public void Request_NullInput_Null() => Assert.Null(AdminRequest.Parse(null!));
+
+    [Fact]
+    public void Request_UnknownOp_Null() => Assert.Null(AdminRequest.Parse("{\"ops\":[\"Bogus\"]}"));
+
+    [Fact]
+    public void Request_EmptyOps_Null()
+    {
+        Assert.Null(AdminRequest.Parse("{\"ops\":[]}"));
+        Assert.Null(AdminRequest.Parse("{\"vhdx\":[]}"));
+    }
+
+    [Fact]
+    public void Request_MissingVhdx_EmptyList()
+    {
+        var r = AdminRequest.Parse("{\"ops\":[\"WinTemp\"]}");
+        Assert.NotNull(r);
+        Assert.Empty(r!.Vhdx);
+    }
+
+    [Fact]
+    public void Result_RoundTrip()
+    {
+        var r = new AdminResult(123, 4,
+            new[] { new SkipInfo(@"C:\x", "lý do") },
+            new[] { new CompactInfo(@"C:\a.vhdx", 100, 50, null), new CompactInfo(@"C:\b.vhdx", 1, 1, "lỗi") },
+            null);
+        var back = AdminResult.Parse(r.ToJson());
+        Assert.NotNull(back);
+        Assert.Equal(123, back!.RecycledBytes);
+        Assert.Equal(4, back.Succeeded);
+        Assert.Equal(r.Skipped, back.Skipped);
+        Assert.Equal(r.Compacted, back.Compacted);
+        Assert.Null(back.Error);
+        Assert.Null(AdminResult.Parse("garbage"));
+    }
+
+    [Fact]
+    public void FilterVhdx_DropsOutsidePaths()
+    {
+        var a = @"C:\Users\u\AppData\Local\Docker\wsl\disk\docker_data.vhdx";
+        var skipped = new List<SkipInfo>();
+        var kept = AdminRequest.FilterVhdx(
+            new[] { a.ToUpperInvariant(), @"C:\Windows\System32\x.vhdx", "bad\0path" },
+            new[] { a }, skipped);
+        Assert.Single(kept);
+        Assert.Equal(a, kept[0], ignoreCase: true);
+        Assert.Equal(2, skipped.Count);
+        Assert.All(skipped, s => Assert.Equal("Không nằm trong danh sách ổ ảo hợp lệ", s.Reason));
+    }
+}
