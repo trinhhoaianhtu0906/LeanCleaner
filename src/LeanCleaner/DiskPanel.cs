@@ -193,9 +193,13 @@ public class DiskPanel : UserControl
                 // Helper admin không hủy được: tắt Dừng, chỉ hiện thanh chờ.
                 SetBusy(true, marquee: true);
                 _progress.Text = "Đang chờ tiến trình admin…";
-                var ar = await new ElevatedLauncher(_log).RunAsync(new AdminRequest(admin.Select(i => i.Rule.Op!.Value).Distinct().ToList(), Array.Empty<string>()));
+                AdminResult? ar = null;
+                var failed = false;
+                try { ar = await new ElevatedLauncher(_log).RunAsync(new AdminRequest(admin.Select(i => i.Rule.Op!.Value).Distinct().ToList(), Array.Empty<string>())); }
+                catch (Exception ex) when (ex is not OperationCanceledException) { failed = true; extra.Add("Lỗi admin: " + ex.Message); }
                 SetBusy(true);
-                if (ar is null) extra.Add("Đã hủy phần cần quyền admin.");
+                if (failed) { /* đã ghi lỗi; vẫn hiện tóm tắt và quét lại */ }
+                else if (ar is null) extra.Add("Đã hủy phần cần quyền admin.");
                 else
                 {
                     bytes += ar.RecycledBytes;
