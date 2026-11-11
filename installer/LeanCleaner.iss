@@ -2,7 +2,7 @@
 ; Build: run installer\build.ps1 (publishes the self-contained exe, then compiles this script).
 
 #define AppName "LeanCleaner"
-#define AppVersion "1.0.0"
+#define AppVersion "1.1.0"
 #define AppExe "LeanCleaner.exe"
 
 [Setup]
