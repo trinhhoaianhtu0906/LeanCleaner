@@ -6,7 +6,7 @@ public static class AdminTargets
     /// <summary>Các thao tác admin có xóa nội dung thư mục (đưa vào Thùng rác).</summary>
     public static readonly AdminOp[] DeleteOps = { AdminOp.WinTemp, AdminOp.LiveKernelReports, AdminOp.WinUpdateDownload };
 
-    private static readonly EnumerationOptions SafeOpts = new() { IgnoreInaccessible = true };
+    private static readonly EnumerationOptions PackageOpts = new() { IgnoreInaccessible = true, AttributesToSkip = FileAttributes.ReparsePoint };
 
     /// <summary>Thư mục gốc cố định của một thao tác xóa; CompactVhdx không có gốc nên ném ArgumentException.</summary>
     public static string RootOf(AdminOp op, KnownDirs d) => op switch
@@ -51,10 +51,13 @@ public static class AdminTargets
         try
         {
             if (!ct.IsCancellationRequested && Directory.Exists(packages))
-                foreach (var pkg in Directory.EnumerateDirectories(packages, "*", SafeOpts))
+                foreach (var pkg in Directory.EnumerateDirectories(packages, "*", PackageOpts))
                 {
                     if (ct.IsCancellationRequested) break;
-                    var f = Path.Combine(pkg, "LocalState", "ext4.vhdx");
+                    var state = Path.Combine(pkg, "LocalState");
+                    try { if (new DirectoryInfo(state).Attributes.HasFlag(FileAttributes.ReparsePoint)) continue; }
+                    catch (Exception e) when (e is IOException or UnauthorizedAccessException) { continue; }
+                    var f = Path.Combine(state, "ext4.vhdx");
                     if (File.Exists(f)) vhdx.Add(f);
                 }
         }
